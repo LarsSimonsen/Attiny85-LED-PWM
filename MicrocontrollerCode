@@ -1,0 +1,101 @@
+/* AtTiny85 pinout: */
+// 1: reset (external pullup)
+const byte BrightnessPotPin = A3;
+const byte PirInputPin = A2;
+// 4: GND
+const byte LedPwmOutputPin = 0;
+const byte PinD1 = 1;
+const byte PinA1 = A1;
+// 8: 5VDC
+
+/* Setup */
+const boolean InvertBrightnessPot = false;
+
+/* Variables */
+unsigned int CurrentBrightness = 0;
+unsigned int PotBrightness = 0;
+
+void setup() {
+  pinMode(BrightnessPotPin, INPUT);
+  pinMode(PirInputPin, INPUT);
+  pinMode(LedPwmOutputPin, OUTPUT);
+  pinMode(PinD1, INPUT_PULLUP); // disabled but not floating
+  pinMode(PinA1, INPUT_PULLUP); // disabled but not floating
+  CurrentBrightness = 0;
+  TCCR0B = TCCR0B & (1 << WGM02 | 2 << CS00); // 4 kHz PWM
+}
+
+unsigned int ReadBrightness() {
+  unsigned int PotValue = analogRead(BrightnessPotPin) << 6; // times 64 ... 10 bit to 16 bit ... 0-1023 to 0-65535
+  if (InvertBrightnessPot) {
+    PotValue = 65535-PotValue;
+  }
+  // Make deadzones at each end of the range
+  const unsigned int PotDeadzoneSize = 1023;
+  unsigned int PotDeadzoneUpperLimit = 65535 - PotDeadzoneSize;
+  PotValue = constrain(PotValue, PotDeadzoneSize, PotDeadzoneUpperLimit);
+  // Spread the PotValue over the whole effective range.
+  return map(PotValue, PotDeadzoneSize, PotDeadzoneUpperLimit, 0, 65535);
+}
+
+bool CheckEnable() {
+  return (analogRead(PirInputPin) > 200);
+}
+
+void SetPwmBrightness(unsigned int Brightness) {
+  byte OutputBrightness = CurrentBrightness >> 8; // divided by 256 ... 16 bit to 8 bit ... 0-65535 to 0-255;
+  if (OutputBrightness > 240) {
+    digitalWrite(LedPwmOutputPin, HIGH);
+  } else if (OutputBrightness < 1) {
+    digitalWrite(LedPwmOutputPin, LOW);
+  } else {
+    analogWrite(LedPwmOutputPin, OutputBrightness);
+    //pwmWrite(OutputBrightness);
+  }
+}
+
+unsigned int FadeIn(unsigned int Brightness, byte amount = 1) {
+  unsigned long newBrightness = Brightness + amount;
+  if (newBrightness > 65535) {
+    newBrightness = 65535;
+  }
+  return newBrightness;
+}
+
+unsigned int FadeOut(unsigned int Brightness, byte amount = 1) {
+  long newBrightness = Brightness - amount;
+  if (newBrightness < 0) {
+    newBrightness = 0;
+  }
+  return newBrightness;
+}
+
+void loop() {
+  boolean LedOn = CheckEnable();
+  // Read the fader potentiometer.
+  unsigned int PotBrightness = ReadBrightness();
+  if (LedOn) {
+    // The PIR sensor says that the light should be on.
+    // Fade the current brightness to approach the potentiometer setting.
+    if (CurrentBrightness < PotBrightness) {
+      // User has turned the knob up. Fade in quickly.
+      CurrentBrightness = FadeIn(CurrentBrightness, 4);
+    } else if (CurrentBrightness > PotBrightness) {
+      // User has turned the potentiometer down. Follow immediately.
+      CurrentBrightness = PotBrightness;
+    } else {
+      // Brightness is correct according to user setting. Do nothing.
+    }
+  } else {
+    // The PIR sensor says that the light should be off.
+    if (CurrentBrightness > PotBrightness) {
+      // And the user is turning down the potentiometer. Follow immediately.
+      CurrentBrightness = PotBrightness;
+    }
+    if (CurrentBrightness > 0) {
+      // There is still light. Continue to fade out slowly.
+      CurrentBrightness = FadeOut(CurrentBrightness);
+    }
+  }
+  SetPwmBrightness(CurrentBrightness);
+}
